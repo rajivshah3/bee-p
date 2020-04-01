@@ -18,7 +18,6 @@ use crate::constants::{
 use bee_ternary::{
     raw::RawEncoding,
     Btrit,
-    IsTryte,
     T1B1,
     T1B1Buf,
     TritBuf,
@@ -41,11 +40,9 @@ pub enum TransactionFieldError {
 }
 
 pub trait TransactionField: Sized + TransactionFieldType {
-    type Inner;
-
-    fn try_from_inner(buffer: Self::Inner) -> Result<Self, TransactionFieldError>;
-
-    fn from_inner_unchecked(buffer: Self::Inner) -> Self;
+    type Inner: ToOwned + ?Sized;
+    fn try_from_inner(buffer: <Self::Inner as ToOwned>::Owned) -> Result<Self, TransactionFieldError>;
+    fn from_inner_unchecked(buffer: <Self::Inner as ToOwned>::Owned) -> Self;
 
     fn to_inner(&self) -> &Self::Inner;
 
@@ -164,10 +161,9 @@ impl Hash {
 
     pub fn from_str(hash: &str) -> Self {
         assert!(hash.len() <= BUNDLE.tryte_offset.length);
-        assert!(hash.chars().all(|c| c.is_tryte()));
 
         let missing_trytes = BUNDLE.tryte_offset.length - hash.len();
-        let hash = hash.to_owned() + &iter::repeat(TRYTE_ZERO).take(missing_trytes).collect::<String>();
+        let hash = hash.to_owned() + &iter::repeat('9').take(missing_trytes).collect::<String>();
 
         let mut trits = [0; 243];
 
@@ -189,7 +185,7 @@ impl Hash {
     }
 
     pub fn as_trits(&self) -> &Trits<T1B1> {
-        unsafe { Trits::from_raw_unchecked(self.as_bytes()) }
+        unsafe { Trits::from_raw_unchecked(self.as_bytes(), 243) }
     }
 
     pub fn trit_len() -> usize {
@@ -226,23 +222,34 @@ impl hash::Hash for Hash {
     }
 }
 
+impl TransactionFieldType for Hash {
+    type InnerType = TritBuf<T1B1Buf>;
+
+    fn is_trits_type() -> bool { true }
+}
+
 impl TransactionField for Hash {
-    fn into_inner(&self) -> TritBuf<T1B1Buf> {
-        self.as_trits().to_buf()
+    type Inner = Trits<T1B1>;
+
+    fn to_inner(&self) -> &Self::Inner {
+        self.as_trits()
     }
 
-    fn try_from_tritbuf(buffer: TritBuf<T1B1Buf>) -> Result<Self, TransactionFieldError> {
-        if buffer.len() != Self::trit_len() {
+    fn trit_len() -> usize {
+        243
+    }
+
+    fn try_from_inner(buf: <Self::Inner as ToOwned>::Owned) -> Result<Self, TransactionFieldError> {
+        if buf.len() != Self::trit_len() {
             Err(TransactionFieldError::FieldWrongLength)?
         }
 
-        Ok(Self::from_tritbuf_unchecked(buffer))
+        Ok(Self::from_inner_unchecked(buf))
     }
 
-    fn from_tritbuf_unchecked(buffer: TritBuf<T1B1Buf>) -> Self {
-
+    fn from_inner_unchecked(buf: <Self::Inner as ToOwned>::Owned) -> Self {
         let mut trits = [0; 243];
-        trits.copy_from_slice(buffer.as_i8_slice());
+        trits.copy_from_slice(buf.as_i8_slice());
 
         Self(trits)
     }
@@ -391,13 +398,13 @@ impl Transaction {
                 [TAG.trit_offset.start..TAG.trit_offset.start + TAG.trit_offset.length]
                 .to_buf()))
             .with_attachment_ts(Timestamp(0))
-            .with_bundle(Hash::from_tritbuf_unchecked(
+            .with_bundle(Hash::from_inner_unchecked(
                 trits[BUNDLE.trit_offset.start..BUNDLE.trit_offset.start + BUNDLE.trit_offset.length].to_buf(),
             ))
-            .with_trunk(Hash::from_tritbuf_unchecked(
+            .with_trunk(Hash::from_inner_unchecked(
                 trits[TRUNK.trit_offset.start..TRUNK.trit_offset.start + TRUNK.trit_offset.length].to_buf(),
             ))
-            .with_branch(Hash::from_tritbuf_unchecked(
+            .with_branch(Hash::from_inner_unchecked(
                 trits[BRANCH.trit_offset.start..BRANCH.trit_offset.start + BRANCH.trit_offset.length].to_buf(),
             ))
             .with_attachment_lbts(Timestamp::from_inner_unchecked(0))
